@@ -1,8 +1,10 @@
 # -*- coding:utf-8 -*-
 from datetime import datetime
 import time
+import json
 from bson import ObjectId
 from mongoengine import Document, Q
+from mongoengine.base.datastructures import BaseList
 from mongoengine import(
     IntField,
     StringField,
@@ -34,6 +36,15 @@ class BaseNDBColumnSet():
     def __ne__(elements, other):
         return elements, "__ne", other
 
+    def __sub__(elements, other):
+        pass
+
+    def __neg__(self):
+        return self, "-"
+
+    def __pos__(self):
+        return self, "+"
+
     def IN(elements, other):
         return elements, "__in", other
 
@@ -50,26 +61,38 @@ class StringProperty(BaseNDBColumnSet, StringField):
         super(StringField, self).__init__(**kw)
 
 
-class JsonProperty(BaseNDBColumnSet, DictField):
+class JsonProperty(BaseNDBColumnSet, ListField):
 
     def __get__(self, instance, owner):
-        # PS: NDB code has some integer key, if it must be int covert it
-        #   if not owner and type(owner) == dict:
-        #       owner = dict((str(k), v) for (k, v) in owner.iteritems())
-        super(DictField, self).__get__(instance, owner)
+        value = super(ListField, self).__get__(instance, owner)
+        if not value:
+            return value
+        if type(value) is BaseList:
+            value = value[0]
+        return value
 
     def __set__(self, instance, value):
         if value and type(value) == dict:
-            value = dict((str(k), v) for (k, v) in value.iteritems())
-        super(DictField, self).__set__(instance, value)
+            value = [dict((str(k), v) for (k, v) in value.iteritems())]
+
+        if value and type(value) == list:
+            new_container = []
+            for item in value:
+                if type(item) != dict:
+                    continue
+                convert_d = dict((str(k), v) for (k, v) in item.iteritems())
+                new_container.append(convert_d)
+            value = new_container
+
+        super(ListField, self).__set__(instance, value)
 
     def validate(self, value):
         """Make sure that a list of valid fields is being used.
         """
-        if not isinstance(value, dict):
+        if not isinstance(value, dict) and not isinstance(value, list):
             self.error('Only dictionaries may be used in a DictField')
 
-        super(DictField, self).validate(value)
+        super(ListField, self).validate(value)
 
 
 class DateTimeProperty(BaseNDBColumnSet, DateTimeField):
@@ -102,31 +125,56 @@ class Model(Document):
 
     @classmethod
     def query(cls, *clauses):
-        conditions = {}
-        for item in clauses:
+
+        def get_key(item):
             for key in cls.__dict__.keys():
                 if id(item[0]) == id(getattr(cls, key)):
-                    conditions[key+item[1]] = item[2]
+                    return key
+
+        conditions = {}
+        for item in clauses:
+            key = get_key(item)
+            if not key:
+                continue
+            conditions[key+item[1]] = item[2]
 
         datas = cls.objects(**conditions)
 
         def fetch(limit=len(datas)):
             return datas[:limit]
 
+        def order(*orders):
+            order_arr = []
+            for item in orders:
+                if type(item) != tuple:
+                    item = (item, "")
+                key = get_key(item)
+                if not key:
+                    continue
+                order_arr.append(item[1]+key)
+            order_datas = datas.order_by(*order_arr)
+            setattr(order_datas, "fetch", fetch)
+            return order_datas
+
         setattr(datas, "get", datas.first)
         setattr(datas, "fetch", fetch)
         setattr(datas, "iter", fetch)
+        setattr(datas, "order", order)
         return datas
 
     @classmethod
     def get_by_id(cls, id):
-        return cls.objects(id=id).first()
+        return cls.objects(id=str(id)).first()
 
     def put(self):
         if not self.id:
-            self.id = str(ObjectId())
+            # self.id = str(ObjectId())
+            self.id = str(long(time.time()*1000000))
         self.save()
         return self
+
+    def to_dict(self):
+        return self.to_json()
 
 
 def get_multi(objects):
@@ -170,9 +218,12 @@ if __name__ == '__main__':
 
     t = Test()
     t.question = {1: 123}
-    print t.put()
+    # print t.put()
     print Test.query()
     print Test.query(Test.gname == 'test').fetch(limit=2)
     print Test.query(AND(Test.gname == 'test', Test.gname == 'test'))
+    print Test.query(Test.gname == 'test').order(-Test.gname, Test.gname).fetch(5)
     t1 = Test.query().get()
-    print t1.to_json()
+    t1.question.iteritems()
+    print t1.to_json(), t1.to_dict()
+    print Test.get_by_id(1467621452778378), "get by id"
