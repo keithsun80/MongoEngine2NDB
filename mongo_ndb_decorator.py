@@ -171,7 +171,7 @@ class Model(Document):
             # self.id = str(ObjectId())
             self.id = str(long(time.time()*1000000))
         self.save()
-        return self
+        return self.key
 
     def to_dict(self):
         return self.to_json()
