@@ -1,7 +1,9 @@
 # -*- coding:utf-8 -*-
 from datetime import datetime
+import ast
 import time
 import json
+import functools
 from bson import ObjectId
 from mongoengine import Document, Q
 from mongoengine.base.datastructures import BaseList
@@ -14,6 +16,15 @@ from mongoengine import(
     SequenceField,
     ListField,
 )
+
+
+def transactional(method):
+    # To do
+    # NDB transaction
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        return method(self, *args, **kwargs)
+    return wrapper
 
 
 class BaseNDBColumnSet():
@@ -109,8 +120,10 @@ class FloatProperty(BaseNDBColumnSet, FloatField):
 
 
 class Key():
-    def __init__(cls, oid):
-        return cls.objects.get(id=oid).first()
+    def __init__(self, cls, oid, *clauses):
+        if type(cls) == str:  # don't need support ClassNameParent
+            return None
+        return cls.objects(id=oid).first()
 
 
 class Model(Document):
@@ -124,7 +137,7 @@ class Model(Document):
         super(Document, self).__init__(**kw)
 
     @classmethod
-    def query(cls, *clauses):
+    def query(cls, *clauses, **kw):
 
         def get_key(item):
             for key in cls.__dict__.keys():
@@ -163,7 +176,7 @@ class Model(Document):
         return datas
 
     @classmethod
-    def get_by_id(cls, id):
+    def get_by_id(cls, id, **kw):
         return cls.objects(id=str(id)).first()
 
     def put(self):
@@ -174,7 +187,24 @@ class Model(Document):
         return self.key
 
     def to_dict(self):
-        return self.to_json()
+        return ast.literal_eval(self.to_json(ensure_ascii=False,
+                                             encoding='utf8'))
+
+    @classmethod
+    def get_or_insert(cls, key_name, parent=None, app=None, namespace=None,
+                      context_options=None, **constructor_args):
+
+        # if constructor_args not in class attributes throw Exception
+        datas = cls.objects(**constructor_args)
+        if datas:
+            return datas.first()
+        else:
+            instance = cls()
+            instance.id = key_name
+            for k, v in constructor_args.iteritems():
+                setattr(instance, k, v)
+            instance.save()
+            return instance
 
 
 def get_multi(objects):
@@ -207,23 +237,26 @@ class Test(Model):
     question = JsonProperty(indexed=False)
     xtime = DateTimeProperty(auto_now_add=True, indexed=False)
 
+
 if __name__ == '__main__':
     from mongoengine import connect
 
-    conn = connect("test",
-                   username="test",
-                   password="test-keith",
+    conn = connect("vonvon-test",
+                   username="keith",
+                   password="vonvon-keith",
                    host="localhost"
                    )
 
     t = Test()
     t.question = {1: 123}
+    print Key(Test, 123), "Key test"
     # print t.put()
-    print Test.query()
-    print Test.query(Test.gname == 'test').fetch(limit=2)
-    print Test.query(AND(Test.gname == 'test', Test.gname == 'test'))
-    print Test.query(Test.gname == 'test').order(-Test.gname, Test.gname).fetch(5)
+    print t.get_or_insert("key", gname="123123").to_json(), "get or insert"
+    print Test.query(), "search all"
+    print Test.query(Test.gname == 'test').fetch(limit=2), "limit=2"
+    print Test.query(AND(Test.gname == 'test', Test.gname == 'test')), "multiple condition"
+    print Test.query(Test.gname == 'test').order(-Test.gname, Test.gname).fetch(5), "order"
     t1 = Test.query().get()
     t1.question.iteritems()
-    print t1.to_json(), t1.to_dict()
+    print t1.to_json(), t1.to_dict(), "to json"
     print Test.get_by_id(1467621452778378), "get by id"
