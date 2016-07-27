@@ -15,16 +15,20 @@ from mongoengine import(
     FloatField,
     SequenceField,
     ListField,
+    BooleanField,
 )
 
 
-def transactional(method):
-    # To do
-    # NDB transaction
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        return method(self, *args, **kwargs)
-    return wrapper
+def transactional(*args, **kwargs):
+    # to do
+    # NDB transactional
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kw):
+            return func(*args, **kw)
+        return wrapper
+
+    return decorator
 
 
 class BaseNDBColumnSet():
@@ -116,6 +120,15 @@ class DateTimeProperty(BaseNDBColumnSet, DateTimeField):
 
 
 class FloatProperty(BaseNDBColumnSet, FloatField):
+    pass
+
+
+class KeyProperty(BaseNDBColumnSet):
+    def __init__(*args, **kw):
+        pass
+
+
+class BooleanProperty(BaseNDBColumnSet, BooleanField):
     pass
 
 
@@ -216,14 +229,6 @@ def delete_multi(objects):
     pass
 
 
-def transactional(func):
-    # To do
-    def func_wrapper(path):
-        return func(path)
-
-    return func_wrapper
-
-
 def AND(*clauses):
     # default is 'logic and', and NDB didn't use complex condition
     # To do : add specil symbol to clauses, in query method use Q
@@ -238,6 +243,10 @@ class Test(Model):
     xtime = DateTimeProperty(auto_now_add=True, indexed=False)
 
 
+@transactional(retries=4, xg=True)
+def test():
+    pass
+
 if __name__ == '__main__':
     from mongoengine import connect
 
@@ -249,6 +258,7 @@ if __name__ == '__main__':
 
     t = Test()
     t.question = {1: 123}
+    print test(), "wrapper test"
     print Key(Test, 123), "Key test"
     # print t.put()
     print t.get_or_insert("key", gname="123123").to_json(), "get or insert"
