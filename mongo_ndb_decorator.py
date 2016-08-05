@@ -1,6 +1,7 @@
 # -*- coding:utf-8 -*-
 from datetime import datetime
 import ast
+import copy
 import time
 import json
 import functools
@@ -80,25 +81,26 @@ class JsonProperty(BaseNDBColumnSet, ListField):
 
     def __get__(self, instance, owner):
         value = super(ListField, self).__get__(instance, owner)
-        if not value:
-            return value
-        if type(value) is BaseList:
-            value = value[0]
+        if isinstance(value, BaseList) or isinstance(value, list):
+            if value.count('dict') or value.count('list'):
+                return value[1]
         return value
 
     def __set__(self, instance, value):
-        if value and type(value) == dict:
-            value = [dict((str(k), v) for (k, v) in value.iteritems())]
-
-        if value and type(value) == list:
+        if value and isinstance(value, list):
+            if value.count('dict') or value.count('list'):
+                super(ListField, self).__set__(instance, value[1])
+                return
             new_container = []
             for item in value:
-                if type(item) != dict:
+                if not isinstance(item, dict):
                     continue
                 convert_d = dict((str(k), v) for (k, v) in item.iteritems())
                 new_container.append(convert_d)
-            value = new_container
+            value = ["list", new_container]
 
+        if value and isinstance(value, dict):
+            value = ["dict", dict((str(k), v) for (k, v) in value.iteritems())]
         super(ListField, self).__set__(instance, value)
 
     def validate(self, value):
@@ -134,7 +136,7 @@ class BooleanProperty(BaseNDBColumnSet, BooleanField):
 
 class Key():
     def __init__(self, cls, oid, *clauses):
-        if type(cls) == str:  # don't need support ClassNameParent
+        if isinstance(cls, str):
             return None
         return cls.objects(id=oid).first()
 
@@ -172,7 +174,7 @@ class Model(Document):
         def order(*orders):
             order_arr = []
             for item in orders:
-                if type(item) != tuple:
+                if not isinstance(item, tuple):
                     item = (item, "")
                 key = get_key(item)
                 if not key:
@@ -240,12 +242,30 @@ class Test(Model):
     gname = StringProperty(indexed=False)
     xname = IntegerProperty()
     question = JsonProperty(indexed=False)
+    option = JsonProperty(indexed=False)
     xtime = DateTimeProperty(auto_now_add=True, indexed=False)
 
 
 @transactional(retries=4, xg=True)
 def test():
     pass
+
+
+def __delete_test__():
+    for t in Test.objects:
+        t.delete()
+
+def __api_test__():
+    print test(), "wrapper test"
+    print Key(Test, 123), "Key test"
+    print t.get_or_insert("key", gname="123123").to_json(), "get or insert"
+    print Test.query(), "search all"
+    print Test.query(Test.gname == 'test').fetch(limit=2), "limit=2"
+    print Test.query(AND(Test.gname == 'test', Test.gname == 'test')), "multiple condition"
+    print Test.query(Test.gname == 'test').order(-Test.gname, Test.gname).fetch(5), "order"
+    t1 = Test.query().get()
+    print t1.to_json(), t1.to_dict(), "to json"
+    print Test.get_by_id(1467621452778378), "get by id"
 
 if __name__ == '__main__':
     from mongoengine import connect
@@ -255,18 +275,14 @@ if __name__ == '__main__':
                    password="vonvon-keith",
                    host="localhost"
                    )
-
+    __delete_test__()
     t = Test()
-    t.question = {1: 123}
-    print test(), "wrapper test"
-    print Key(Test, 123), "Key test"
-    # print t.put()
-    print t.get_or_insert("key", gname="123123").to_json(), "get or insert"
-    print Test.query(), "search all"
-    print Test.query(Test.gname == 'test').fetch(limit=2), "limit=2"
-    print Test.query(AND(Test.gname == 'test', Test.gname == 'test')), "multiple condition"
-    print Test.query(Test.gname == 'test').order(-Test.gname, Test.gname).fetch(5), "order"
-    t1 = Test.query().get()
-    t1.question.iteritems()
-    print t1.to_json(), t1.to_dict(), "to json"
-    print Test.get_by_id(1467621452778378), "get by id"
+    t.question = [{"question--list": 123}, {"question-list2": 123}]
+    t.option = {"option-dict": 123}
+    t.put()
+    print "-------------------"
+    print t.question, t.option
+    print "-------------------"
+    for x in Test.objects:
+        print x.question, "question======"
+        print x.option, "option======="
