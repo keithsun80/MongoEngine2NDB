@@ -6,6 +6,7 @@ import time
 import json
 import functools
 from bson import ObjectId
+from easydict import EasyDict
 from mongoengine import Document, Q
 from mongoengine.base.datastructures import BaseList
 from mongoengine import(
@@ -17,19 +18,10 @@ from mongoengine import(
     SequenceField,
     ListField,
     BooleanField,
+    BinaryField,
+    ReferenceField,
 )
 
-
-def transactional(*args, **kwargs):
-    # to do
-    # NDB transactional
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kw):
-            return func(*args, **kw)
-        return wrapper
-
-    return decorator
 
 
 class BaseNDBColumnSet():
@@ -79,11 +71,19 @@ class StringProperty(BaseNDBColumnSet, StringField):
 
 class JsonProperty(BaseNDBColumnSet, ListField):
 
+    def __init__(self, field=None, **kwargs):
+        self.field = field
+        self._rewrite_data = None
+        kwargs.setdefault('default', lambda: [])
+        super(ListField, self).__init__(**kwargs)
+
     def __get__(self, instance, owner):
         value = super(ListField, self).__get__(instance, owner)
         if isinstance(value, BaseList) or isinstance(value, list):
             if value.count('dict') or value.count('list'):
-                return value[1]
+                if self._rewrite_data:
+                    value[1] = self._rewrite_data
+                return self._form_base_type_decorator(value[1])
         return value
 
     def __set__(self, instance, value):
@@ -93,7 +93,7 @@ class JsonProperty(BaseNDBColumnSet, ListField):
                 return
             new_container = []
             for item in value:
-                if not isinstance(item, dict):
+                if not isinstance(item, dict):  # Mark
                     continue
                 convert_d = dict((str(k), v) for (k, v) in item.iteritems())
                 new_container.append(convert_d)
@@ -103,11 +103,25 @@ class JsonProperty(BaseNDBColumnSet, ListField):
             value = ["dict", dict((str(k), v) for (k, v) in value.iteritems())]
         super(ListField, self).__set__(instance, value)
 
+    def _form_base_type_decorator(self, value):
+        result = self._from_base_type(value)
+        if isinstance(result, EasyDict): # need to improve
+            self._rewrite_data = result
+        return result
+
+    def _from_base_type(self, value):
+        """I didn't find a good way to support this function T. T
+           I tried use this way.
+            value[1] = _from_base_type
+           it's doesn't working
+        """
+        return value
+
     def validate(self, value):
         """Make sure that a list of valid fields is being used.
         """
         if not isinstance(value, dict) and not isinstance(value, list):
-            self.error('Only dictionaries may be used in a DictField')
+            self.error('Only support dict or list')
 
         super(ListField, self).validate(value)
 
@@ -125,21 +139,57 @@ class FloatProperty(BaseNDBColumnSet, FloatField):
     pass
 
 
-class KeyProperty(BaseNDBColumnSet):
-    def __init__(*args, **kw):
-        pass
+class KeyProperty(BaseNDBColumnSet, ReferenceField):
+    def __init__(self, **kw):
+        kind = kw.get('kind', False)
+        self.dbref = False
+        self.document_type_obj = kind
+        self.reverse_delete_rule = 0
+        if kind:
+            super(ReferenceField, self).__init__()
 
 
 class BooleanProperty(BaseNDBColumnSet, BooleanField):
     pass
 
 
-class Key():
-    def __init__(self, cls, oid, *clauses):
-        if isinstance(cls, str):
-            return None
-        return cls.objects(id=oid).first()
+class BlobProperty(BaseNDBColumnSet, BinaryField):
+    pass
 
+
+class ComputedProperty(object):
+    def __init__(self, func, name=None, indexed=None, repeated=None,
+                 verbose_name=None):
+
+        self._func = func
+
+    def __get__(self, instance, owner):
+        return self._func(instance)
+
+    def __set__(self, instance, value):
+        raise Exception("Cannot assign to a ComputedProperty")
+
+
+def Key(cls, oid, *clauses):
+    if isinstance(cls, str):
+        return None
+    return cls.objects(id=oid).first()
+
+
+class Query():
+    pass
+
+
+class query():
+    Query = Query()
+
+
+class Cursor():
+    def __init__(self, **kw):
+        self.cursor = kw.get('urlsfafe')
+
+    def urlsafe(self):
+        return self.cursor
 
 class Model(Document):
     meta = {'allow_inheritance': True}
@@ -161,7 +211,7 @@ class Model(Document):
 
         conditions = {}
         for item in clauses:
-            key = get_key(item)
+            key = item[0].name
             if not key:
                 continue
             conditions[key+item[1]] = item[2]
@@ -171,22 +221,35 @@ class Model(Document):
         def fetch(limit=len(datas)):
             return datas[:limit]
 
+        def fetch_page(count, keys_only=False, start_cursor=None):
+            cursor = start_cursor.cursor if start_cursor else 0
+            more = len(datas) < cursor+count
+            result = datas[cursor: cursor+count]
+            if keys_only:
+                result = [obj.key for obj in result]
+            return result, Cursor(urlsfafe=cursor+count+1), more
+
         def order(*orders):
+            if not datas:
+                return datas
             order_arr = []
             for item in orders:
                 if not isinstance(item, tuple):
                     item = (item, "")
-                key = get_key(item)
+                key = item[0].name
                 if not key:
                     continue
                 order_arr.append(item[1]+key)
+            print order_arr, "order by arr ========"
             order_datas = datas.order_by(*order_arr)
             setattr(order_datas, "fetch", fetch)
+            setattr(order_datas, "fetch_page", fetch_page)
             return order_datas
 
         setattr(datas, "get", datas.first)
         setattr(datas, "fetch", fetch)
         setattr(datas, "iter", fetch)
+        setattr(datas, "fetch_page", fetch_page)
         setattr(datas, "order", order)
         return datas
 
@@ -198,6 +261,7 @@ class Model(Document):
         if not self.id:
             # self.id = str(ObjectId())
             self.id = str(long(time.time()*1000000))
+            self._created = True
         self.save()
         return self.key
 
@@ -226,9 +290,32 @@ def get_multi(objects):
     return objects
 
 
+def put_multi(objects):
+    keys = []
+    for obj in objects:
+        obj.put()
+        keys.append(obj.key)
+    return keys
+
+
 def delete_multi(objects):
     # To do
     pass
+
+
+def transactional(*args, **kwargs):
+    # to do
+    # NDB transactional
+    def decorator(func):
+        if not hasattr(func, '__call__'):
+            return args[0](func)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kw):
+            return func(*args, **kw)
+        return wrapper
+
+    return decorator
 
 
 def AND(*clauses):
@@ -237,27 +324,51 @@ def AND(*clauses):
     return clauses
 
 
-class Test(Model):
+class EasyDictProperty(JsonProperty):
+    def _from_base_type(self, value):
+        return EasyDict(value)
 
+
+class KeyPropertyTest(Model):
+    rname = StringProperty(indexed=False)
+
+
+class Test(Model):
     gname = StringProperty(indexed=False)
     xname = IntegerProperty()
     question = JsonProperty(indexed=False)
     option = JsonProperty(indexed=False)
+    properties = EasyDictProperty()
     xtime = DateTimeProperty(auto_now_add=True, indexed=False)
+    compute = ComputedProperty(lambda self: self.t_key)
+    wtk = StringProperty(indexed=False)
+    t_key = KeyProperty(kind=KeyPropertyTest)
+
+class ReferenceTest(Model):
+    test = KeyProperty(kind=Test)
+    rname = StringProperty(indexed=False)
 
 
-@transactional(retries=4, xg=True)
-def test():
-    pass
+
+@transactional()
+def test(path):
+    return path
 
 
 def __delete_test__():
     for t in Test.objects:
         t.delete()
 
-def __api_test__():
+
+def __api_test__history():
+    reference = ReferenceTest()
+    reference.test = t
+    print reference.__class__._fields.get('test').name, "====what ?=====",
+    reference.put()
+
+    print query.Query, "query attributes"
     print test(), "wrapper test"
-    print Key(Test, 123), "Key test"
+
     print t.get_or_insert("key", gname="123123").to_json(), "get or insert"
     print Test.query(), "search all"
     print Test.query(Test.gname == 'test').fetch(limit=2), "limit=2"
@@ -266,6 +377,25 @@ def __api_test__():
     t1 = Test.query().get()
     print t1.to_json(), t1.to_dict(), "to json"
     print Test.get_by_id(1467621452778378), "get by id"
+
+def __api_test__json():
+    t = Test()
+    t.question = [{"question--list": 123}, {"question-list2": 123}]
+    t.option = {"option-dict": 123}
+    t.properties = {"properties": None, "image_url": None}
+    t.gname = "gname?"
+    t.put()
+    print Key(Test, 123), "Key test"
+    print type(t.properties), t.properties
+    t.properties.image_url = "the path"
+    print t.properties
+    print "-------------------"
+    print t.question, t.option
+    print "-------------------"
+    for x in Test.objects:
+        print x.question, "question======"
+        print x.option, "option======="
+
 
 if __name__ == '__main__':
     from mongoengine import connect
@@ -277,12 +407,14 @@ if __name__ == '__main__':
                    )
     __delete_test__()
     t = Test()
-    t.question = [{"question--list": 123}, {"question-list2": 123}]
-    t.option = {"option-dict": 123}
+    t.properties = {"properties": None, "image_url": 123}
+    t.gname = "gname?"
     t.put()
-    print "-------------------"
-    print t.question, t.option
-    print "-------------------"
-    for x in Test.objects:
-        print x.question, "question======"
-        print x.option, "option======="
+    print "wrapper ------", test("path")
+    print Test.query(Test.wtk == 'gname?1').fetch()
+    print t.compute, "ComputedProperty======"
+    print "-----------------"
+    print type(t.properties), t.properties.image_url
+    t.properties.image_url = "the path"
+    # import ipdb; ipdb.set_trace()
+    print t.properties
