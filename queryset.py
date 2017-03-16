@@ -22,7 +22,7 @@ class Cursor():
 def Key(cls, oid, *clauses):
     if isinstance(cls, str):
         return None
-    return cls.objects(id=oid).first()
+    return cls.objects(id=str(oid)).first()
 
 
 def get_multi(objects):
@@ -45,13 +45,21 @@ def delete_multi(objects):
 def transactional(*args, **kwargs):
     # to do
     # NDB transactional
-    def decorator(func):
+    if args:
+        func = args[0]
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+
+    def decorator(func, *args, **kwargs):
         if not hasattr(func, '__call__'):
             return args[0](func)
 
         @functools.wraps(func)
-        def wrapper(*args, **kw):
-            return func(*args, **kw)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
         return wrapper
 
     return decorator

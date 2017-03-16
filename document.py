@@ -2,21 +2,31 @@
 import ast
 import time
 import functools
+import traceback
+
 from bson import ObjectId
 from mongoengine import Document, Q
-from mongoengine import StringField
+from mongoengine import StringField, DynamicField
 from queryset import Cursor
 
 
 class Model(Document):
     meta = {'allow_inheritance': True}
+
     id = StringField(primary_key=True)
+    parent = DynamicField()
 
     def __init__(self, **kw):
         self.key = type('AnonymousObject', (object,), {},)()
         setattr(self.key, "id", lambda: str(self.id))
         setattr(self.key, "delete", lambda: self.delete())
         super(Document, self).__init__(**kw)
+
+    @classmethod
+    def _get_collection_name(cls):
+        """Returns the collection name for this class. None for abstract class
+        """
+        return cls.__name__
 
     @classmethod
     def query(cls, *clauses, **kw):
@@ -35,8 +45,10 @@ class Model(Document):
 
         datas = cls.objects(**conditions)
 
-        def fetch(limit=len(datas)):
-            return datas[:limit]
+        def fetch(limit=len(datas), keys_only=True):
+            fetched_datas = datas[:limit]
+            setattr(fetched_datas, "sort", order)
+            return fetched_datas
 
         def fetch_page(count, keys_only=False, start_cursor=None):
             cursor = start_cursor.cursor if start_cursor else 0
@@ -46,7 +58,7 @@ class Model(Document):
                 result = [obj.key for obj in result]
             return result, Cursor(urlsfafe=cursor+count+1), more
 
-        def order(*orders):
+        def order(*orders, **kw):
             if not datas:
                 return datas
             order_arr = []
@@ -58,6 +70,7 @@ class Model(Document):
                     continue
                 order_arr.append(item[1]+key)
             order_datas = datas.order_by(*order_arr)
+            setattr(order_datas, "get", order_datas.first)
             setattr(order_datas, "fetch", fetch)
             setattr(order_datas, "fetch_page", fetch_page)
             return order_datas
@@ -67,6 +80,7 @@ class Model(Document):
         setattr(datas, "iter", fetch)
         setattr(datas, "fetch_page", fetch_page)
         setattr(datas, "order", order)
+
         return datas
 
     @classmethod
@@ -81,9 +95,16 @@ class Model(Document):
         self.save()
         return self.key
 
+    def put_async(self):
+        # To do mongoDb async save method
+        return self.put()
+
     def to_dict(self):
         return ast.literal_eval(self.to_json(ensure_ascii=False,
                                              encoding='utf8'))
+
+    def get(self):
+        return self
 
     @classmethod
     def get_or_insert(cls, key_name, parent=None, app=None, namespace=None,

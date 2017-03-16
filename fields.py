@@ -80,6 +80,10 @@ class JsonProperty(BaseNDBColumnSet, ListField):
                 if self._rewrite_data:
                     value[1] = self._rewrite_data
                 return self._form_base_type_decorator(value[1])
+
+        if value:
+            for k, v in value.iteritems():
+                setattr(value, k, v)
         return value
 
     def __set__(self, instance, value):
@@ -103,6 +107,8 @@ class JsonProperty(BaseNDBColumnSet, ListField):
         result = self._from_base_type(value)
         if isinstance(result, EasyDict):  # need to improve
             self._rewrite_data = result
+        for key, value in result.iteritems():
+            setattr(result, key, value)
         return result
 
     def _from_base_type(self, value):
@@ -166,7 +172,14 @@ class KeyProperty(BaseNDBColumnSet, ReferenceField):
             if value is not None:
                 instance._data[self.name] = cls._from_son(value)
 
-        return super(ReferenceField, self).__get__(instance, owner)
+        reference = super(ReferenceField, self).__get__(instance, owner)
+        if type(reference.id) == unicode:
+            id_val = reference.id
+            setattr(reference, "id", lambda: id_val)
+        return reference
+
+    def get():
+        return self.reference
 
 
 class BooleanProperty(BaseNDBColumnSet, BooleanField):
@@ -178,12 +191,22 @@ class BlobProperty(BaseNDBColumnSet, BinaryField):
 
 
 class ComputedProperty(object):
+    """
+        I have no idea to implement NDB ComputedProperty use mongoengine
+        sns = ndb.ComputedProperty(lambda self: get_sns_from_fb_id(self.sns_id))
+                                            ↑  instance
+        PollUser.query(PollUser.sns == 'vv')
+                         ↑   class
+
+    """
     def __init__(self, func, name=None, indexed=None, repeated=None,
                  verbose_name=None):
-
         self._func = func
 
     def __get__(self, instance, owner):
+        # if class directly to use ComputedProperty
+        if not instance:
+            pass
         return self._func(instance)
 
     def __set__(self, instance, value):
